@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Academic Notes Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3B82F6',
+                        accent: '#10B981'
+                    }
+                }
+            }
+        }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.4.2/mammoth.browser.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+</head>
+<body class="min-h-screen bg-gray-50 flex flex-col items-center p-4">
+    <div class="w-full max-w-4xl mb-4 p-3 bg-primary/10 text-primary rounded-lg shadow hidden" id="status-bar"></div>
+    <div class="hidden flex justify-center my-4" id="loader">
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+    </div>
+
+    <!-- Upload Section -->
+    <section id="upload-section" class="w-full max-w-4xl bg-white p-6 rounded-lg shadow">
+        <h1 class="text-2xl font-bold text-primary mb-6 text-center">Academic Notes Generator</h1>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label for="apiKey" class="block text-sm font-medium text-gray-700 mb-2">OpenRouter API Key</label>
+                <input type="password" id="apiKey" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary" placeholder="Enter your OpenRouter API key">
+            </div>
+            <div>
+                <label for="fileInput" class="block text-sm font-medium text-gray-700 mb-2">Upload PDF or DOCX</label>
+                <input type="file" id="fileInput" accept=".pdf,.docx" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary">
+            </div>
+        </div>
+        <div class="mt-4">
+            <label for="topic" class="block text-sm font-medium text-gray-700 mb-2">Topic/Chapter (min 5 chars)</label>
+            <input type="text" id="topic" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary" placeholder="e.g., Chapter 3: Quantum Mechanics" minlength="5" required>
+            <p id="topicError" class="text-red-500 text-sm mt-1 hidden">Topic must be at least 5 characters.</p>
+        </div>
+        <button id="generatePlanBtn" class="w-full md:w-auto bg-primary hover:bg-primary/90 text-white font-medium py-3 px-6 rounded-lg mt-6 disabled:opacity-50 disabled:cursor-not-allowed min-h-12">Generate Plan</button>
+    </section>
+
+    <!-- Plan Review Section -->
+    <section id="plan-review-section" class="w-full max-w-4xl bg-white p-6 rounded-lg shadow hidden mt-4">
+        <h2 class="text-xl font-bold text-primary mb-4">Review Plan Outline</h2>
+        <div id="planDisplay" class="prose max-w-full prose-primary mb-6 p-4 bg-gray-50 rounded border"></div>
+        <div class="flex flex-col sm:flex-row gap-4 justify-end">
+            <button id="rejectBtn" class="flex-1 sm:flex-none bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-6 rounded-lg">Reject & Edit</button>
+            <button id="approveBtn" class="flex-1 sm:flex-none bg-accent hover:bg-accent/90 text-white font-medium py-3 px-6 rounded-lg">Approve & Generate Notes</button>
+        </div>
+    </section>
+
+    <!-- Output Section -->
+    <section id="output-section" class="w-full max-w-6xl bg-white p-6 rounded-lg shadow hidden mt-4">
+        <h2 class="text-xl font-bold text-primary mb-4">Generated Study Notes</h2>
+        <div id="notesDisplay" class="prose max-w-full prose-primary mb-6 p-4 bg-gray-50 rounded border max-h-96 md:max-h-[80vh] overflow-auto"></div>
+        <div class="flex flex-col sm:flex-row gap-4 justify-end">
+            <button id="copyBtn" class="flex-1 sm:flex-none bg-primary hover:bg-primary/90 text-white font-medium py-3 px-6 rounded-lg">Copy to Clipboard</button>
+            <button id="newSessionBtn" class="flex-1 sm:flex-none bg-gray-600 hover:bg-gray-700 text-white font-medium py-3 px-6 rounded-lg">Start New Session</button>
+        </div>
+    </section>
+
+    <script>
+        // PDF.js Worker Setup
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        // Global State
+        let openRouterApiKey = localStorage.getItem('apiKey') || '';
+        let extractedTextContent = '';
+        let userTopicPrompt = '';
+        let currentPlan = '';
+        let finalNotes = '';
+        let currentStep = 'upload';
+        let fileType = '';
+
+        // Utility Functions
+        function updateUI() {
+            document.getElementById('upload-section').classList.toggle('hidden', currentStep !== 'upload');
+            document.getElementById('plan-review-section').classList.toggle('hidden', currentStep !== 'plan_review');
+            document.getElementById('output-section').classList.toggle('hidden', currentStep !== 'complete');
+            document.getElementById('loader').classList.add('hidden'); // Ensure loader hidden initially
+            document.getElementById('status-bar').classList.add('hidden');
+        }
+
+        function showLoader() {
+            document.getElementById('loader').classList.remove('hidden');
+        }
+
+        function hideLoader() {
+            document.getElementById('loader').classList.add('hidden');
+        }
+
+        function showStatus(message, type = 'info') {
+            const statusBar = document.getElementById('status-bar');
+            statusBar.textContent = message;
+            statusBar.className = `w-full max-w-4xl mb-4 p-3 rounded-lg shadow ${type === 'error' ? 'bg-red-100 text-red-700' : 'bg-primary/10 text-primary'}`;
+            statusBar.classList.remove('hidden');
+            setTimeout(() => statusBar.classList.add('hidden'), 5000);
+            hideLoader();
+        }
+
+        function checkInputs() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const file = document.getElementById('fileInput').files[0];
+            const topic = document.getElementById('topic').value.trim();
+            const topicError = document.getElementById('topicError');
+            const btn = document.getElementById('generatePlanBtn');
+
+            if (topic.length < 5) {
+                topicError.classList.remove('hidden');
+                btn.disabled = true;
+                return false;
+            } else {
+                topicError.classList.add('hidden');
+            }
+
+            if (!apiKey || !file || !topic) {
+                btn.disabled = true;
+                return false;
+            }
+            btn.disabled = false;
+            return true;
+        }
+
+        // File Extraction
+        async function extractText(file) {
+            try {
+                showStatus('Extracting text...', 'info');
+                showLoader();
+
+                const fileName = file.name.toLowerCase();
+                fileType = fileName.endsWith('.pdf') ? 'pdf' : 'docx';
+
+                let arrayBuffer;
+                if (fileType === 'pdf') {
+                    const url = URL.createObjectURL(file);
+                    const loadingTask = pdfjsLib.getDocument(url);
+                    const pdf = await loadingTask.promise;
+
+                    let fullText = '';
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        const pageText = textContent.items.map(item => item.str).join(' ');
+                        fullText += pageText + '\n';
+                    }
+                    extractedTextContent = fullText.trim();
+                    URL.revokeObjectURL(url);
+                } else { // DOCX
+                    arrayBuffer = await file.arrayBuffer();
+                    const result = await mammoth.extractRawText({ arrayBuffer });
+                    extractedTextContent = result.value.trim();
+                }
+
+                showStatus('Text extracted successfully!', 'info');
+                userTopicPrompt = document.getElementById('topic').value.trim();
+                openRouterApiKey = document.getElementById('apiKey').value.trim();
+                localStorage.setItem('apiKey', openRouterApiKey);
+            } catch (error) {
+                showStatus(`Failed to extract text: ${error.message}`, 'error');
+                extractedTextContent = '';
+                fileType = '';
+            } finally {
+                hideLoader();
+            }
+        }
+
+        // API Retry Logic
+        async function apiCallWithRetry(url, options, maxRetries = 3) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.ok) return response;
+                    if (response.status === 429) {
+                        const delay = Math.pow(2, i) * 1000;
+                        showStatus(`Rate limit hit. Retrying in ${delay}s...`, 'info');
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+                } catch (error) {
+                    if (i === maxRetries - 1) throw error;
+                }
+            }
+        }
+
+        // LLM Calls
+        async function generatePlan() {
+            const prompt = `Act as a world-class academic note-taker and learning designer. Your task is to analyze the provided text from a book chapter and propose a detailed, multi-section outline for a set of study notes specifically on the topic: ${userTopicPrompt}. The user will approve or reject this plan. Do NOT generate the notes yet.
+
+Constraint: Ensure the proposed outline uses 4-6 main headings (H2) and 3-5 sub-points (H3/bullet points) under each. The tone should be clear and concise.
+
+TEXT CONTENT FOR ANALYSIS:
+---
+${extractedTextContent.substring(0, 5000)}
+---
+Proposed Outline:`;
+
+            const options = {
+                method: 'POST',
+                headers: {
+                    'Authorization': \`Bearer \${openRouterApiKey}\`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': window.location.origin,
+                    'X-Title': document.title
+                },
+                body: JSON.stringify({
+                    model: 'groq/grok-4-for-tool-use',
+                    messages: [{ role: 'user', content: prompt }],
+                    stream: false
+                })
+            };
+
+            const response = await apiCallWithRetry('https://openrouter.ai/api/v1/chat/completions', options);
+            const data = await response.json();
+            currentPlan = data.choices[0].message.content;
+            document.getElementById('planDisplay').innerHTML = marked.parse(currentPlan);
+            currentStep = 'plan_review';
+            updateUI();
+            showStatus('Plan generated! Review and approve.', 'info');
+        }
+
+        async function generateNotes() {
+            const prompt = `Act as a world-class academic writer. You have been provided with the full text content of a document and an approved outline. Your task is to generate the final, detailed, and comprehensive study notes following the approved plan precisely. The notes must only use information found in the TEXT CONTENT provided.
+
+1. Use the following **APPROVED PLAN** as the final structure for your notes. Use the specified headings exactly.
+${currentPlan}
+
+2. The notes must be thorough, using complete sentences and paragraphs under each point.
+
+3. The final output must be formatted strictly in Markdown.
+
+FULL TEXT CONTENT FOR REFERENCE:
+---
+${extractedTextContent}
+---
+
+FINAL NOTES:`;
+
+            const options = {
+                method: 'POST',
+                headers: {
+                    'Authorization': \`Bearer \${openRouterApiKey}\`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': window.location.origin,
+                    'X-Title': document.title
+                },
+                body: JSON.stringify({
+                    model: 'groq/grok-4-for-tool-use',
+                    messages: [{ role: 'user', content: prompt }],
+                    stream: false
+                })
+            };
+
+            const response = await apiCallWithRetry('https://openrouter.ai/api/v1/chat/completions', options);
+            const data = await response.json();
+            finalNotes = data.choices[0].message.content;
+            document.getElementById('notesDisplay').innerHTML = marked.parse(finalNotes);
+            currentStep = 'complete';
+            updateUI();
+            showStatus('Notes generated successfully!', 'info');
+        }
+
+        // Event Listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('apiKey').value = openRouterApiKey;
+            updateUI();
+
+            // Input checks
+            document.getElementById('apiKey').addEventListener('input', checkInputs);
+            document.getElementById('fileInput').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    if (file.size > 50 * 1024 * 1024) {
+                        showStatus('File too large (max 50MB).', 'error');
+                        e.target.value = '';
+                        return;
+                    }
+                    extractText(file);
+                    checkInputs();
+                }
+            });
+            document.getElementById('topic').addEventListener('input', (e) => {
+                userTopicPrompt = e.target.value.trim();
+                checkInputs();
+            });
+
+            document.getElementById('generatePlanBtn').addEventListener('click', async () => {
+                if (checkInputs() && extractedTextContent) {
+                    showStatus('Generating plan...', 'info');
+                    showLoader();
+                    await generatePlan();
+                } else {
+                    showStatus('Please complete all inputs and upload a file.', 'error');
+                }
+            });
+
+            document.getElementById('rejectBtn').addEventListener('click', () => {
+                currentPlan = '';
+                extractedTextContent = '';
+                fileType = '';
+                document.getElementById('fileInput').value = '';
+                document.getElementById('topic').value = '';
+                currentStep = 'upload';
+                updateUI();
+                showStatus('Plan rejected. Edit and try again.', 'info');
+            });
+
+            document.getElementById('approveBtn').addEventListener('click', async () => {
+                showStatus('Generating notes...', 'info');
+                showLoader();
+                try {
+                    await generateNotes();
+                } catch (error) {
+                    showStatus(`Failed to generate notes: ${error.message}`, 'error');
+                    currentStep = 'plan_review';
+                    updateUI();
+                }
+            });
+
+            document.getElementById('copyBtn').addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(finalNotes);
+                    showStatus('Copied to clipboard!', 'info');
+                } catch (err) {
+                    showStatus('Failed to copy. Please select and copy manually.', 'error');
+                }
+            });
+
+            document.getElementById('newSessionBtn').addEventListener('click', () => {
+                openRouterApiKey = '';
+                extractedTextContent = '';
+                userTopicPrompt = '';
+                currentPlan = '';
+                finalNotes = '';
+                fileType = '';
+                localStorage.removeItem('apiKey');
+                document.getElementById('apiKey').value = '';
+                document.getElementById('fileInput').value = '';
+                document.getElementById('topic').value = '';
+                currentStep = 'upload';
+                updateUI();
+                showStatus('New session started.', 'info');
+            });
+        });
+    </script>
+</body>
+</html>
