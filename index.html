@@ -229,26 +229,12 @@ Proposed Outline:`;
         }
 
         async function generateNotes() {
-            const prompt = `Act as a world-class academic writer. You have been provided with the full text content of a document and an approved outline. Your task is to generate the final, detailed, and comprehensive study notes following the approved plan precisely. The notes must only use information found in the TEXT CONTENT provided.
-
-1. Use the following **APPROVED PLAN** as the final structure for your notes. Use the specified headings exactly.
-${currentPlan}
-
-2. The notes must be thorough, using complete sentences and paragraphs under each point.
-
-3. The final output must be formatted strictly in Markdown.
-
-FULL TEXT CONTENT FOR REFERENCE:
----
-${extractedTextContent}
----
-
-FINAL NOTES:`;
+            const prompt = "Act as a world-class academic writer. You have been provided with the full text content of a document and an approved outline. Your task is to generate the final, detailed, and comprehensive study notes following the approved plan precisely. The notes must only use information found in the TEXT CONTENT provided.\n\n1. Use the following **APPROVED PLAN** as the final structure for your notes. Use the specified headings exactly.\n" + currentPlan + "\n\n2. The notes must be thorough, using complete sentences and paragraphs under each point.\n\n3. The final output must be formatted strictly in Markdown.\n\nFULL TEXT CONTENT FOR REFERENCE:\n---\n" + extractedTextContent + "\n---\n\nFINAL NOTES:";
 
             const options = {
                 method: 'POST',
                 headers: {
-                    'Authorization': \`Bearer \${openRouterApiKey}\`,
+                    'Authorization': "Bearer " + openRouterApiKey,
                     'Content-Type': 'application/json',
                     'HTTP-Referer': window.location.origin,
                     'X-Title': document.title
